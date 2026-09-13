@@ -1,0 +1,5 @@
+{
+  "_comment": "Point EMBER_PRICING_PATH at a copy of this file to override or extend the built-in rates. Keys are matched as a case-insensitive substring of the reported model name; USD per 1M tokens.",
+  "my-finetuned-gpt-4o-mini": { "inputPerMillion": 0.30, "outputPerMillion": 1.20 },
+  "local-llama-3.1-70b": { "inputPerMillion": 0.0, "outputPerMillion": 0.0 }
+}

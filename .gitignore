@@ -1,0 +1,19 @@
+# Go
+/bin/
+*.db
+*.db-wal
+*.db-shm
+
+# Frontend
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+
+# Demo agent (separate module)
+examples/demo-agent/demo-agent
+
+# OS / editor
+.DS_Store
+*.log
+.idea/
+.vscode/
