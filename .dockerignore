@@ -1,0 +1,38 @@
+# Keep the build context small: the Dockerfile builds the dashboard and the
+# binary from source inside the image, so none of the local build output or
+# tooling state needs to be shipped to the daemon.
+
+# Local build output (rebuilt in-image)
+bin/
+web/dist/
+web/node_modules/
+
+# Local databases — never bake someone's traces into an image layer
+*.db
+*.db-wal
+*.db-shm
+
+# The demo agent is a separate module, not part of the server build
+examples/demo-agent/demo-agent
+
+# VCS, CI, and docs
+.git/
+.github/
+.gitignore
+docs/
+*.md
+!README.md
+LICENSE
+
+# Editor / OS noise
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# Compose and env files (secrets must not enter the image)
+docker-compose.yml
+docker-compose.override.yml
+.env
+.env.*
+!.env.example

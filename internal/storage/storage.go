@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sakshamgoswami/ember/internal/model"
@@ -53,10 +54,19 @@ func hashKey(key string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// EnsureProject creates the project if it doesn't exist yet, generating a
-// fresh API key. apiKey is only non-empty when the project was just created
-// — callers must print it then, because the plaintext is never stored.
-func (s *Store) EnsureProject(ctx context.Context, id, name string) (apiKey string, created bool, err error) {
+// ValidAPIKeyFormat reports whether key is shaped like a key Ember issues.
+// Operator-supplied keys (EMBER_API_KEY) go through this so a typo or an
+// accidentally empty environment variable can't become a live credential.
+func ValidAPIKeyFormat(key string) bool {
+	return len(key) >= 16 && len(key) <= 200 && strings.TrimSpace(key) == key
+}
+
+// EnsureProject creates the project if it doesn't exist yet. When key is
+// empty a fresh random key is generated; otherwise the operator's key is
+// adopted as-is (this is what EMBER_API_KEY sets up). apiKey is only
+// non-empty when the project was just created with a generated key —
+// callers must print it then, because the plaintext is never stored.
+func (s *Store) EnsureProject(ctx context.Context, id, name, key string) (apiKey string, created bool, err error) {
 	var existing string
 	err = s.db.QueryRowContext(ctx, `SELECT id FROM projects WHERE id = ?`, id).Scan(&existing)
 	if err == nil {
@@ -65,9 +75,11 @@ func (s *Store) EnsureProject(ctx context.Context, id, name string) (apiKey stri
 	if err != sql.ErrNoRows {
 		return "", false, err
 	}
-	key, err := GenerateAPIKey()
-	if err != nil {
-		return "", false, err
+	generated := key == ""
+	if generated {
+		if key, err = GenerateAPIKey(); err != nil {
+			return "", false, err
+		}
 	}
 	_, err = s.db.ExecContext(ctx,
 		`INSERT INTO projects (id, name, api_key_hash, created_at) VALUES (?, ?, ?, ?)`,
@@ -75,7 +87,37 @@ func (s *Store) EnsureProject(ctx context.Context, id, name string) (apiKey stri
 	if err != nil {
 		return "", false, err
 	}
+	if !generated {
+		// The operator already knows this key; don't echo it to the logs.
+		return "", true, nil
+	}
 	return key, true, nil
+}
+
+// SetAPIKey replaces the key for an existing project, leaving its traces
+// untouched. This is the escape hatch for a key that was never saved from
+// the first-run banner — previously the only recovery was deleting the
+// database. Returns the key that is now live.
+func (s *Store) SetAPIKey(ctx context.Context, projectID, key string) (string, error) {
+	if key == "" {
+		var err error
+		if key, err = GenerateAPIKey(); err != nil {
+			return "", err
+		}
+	}
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE projects SET api_key_hash = ? WHERE id = ?`, hashKey(key), projectID)
+	if err != nil {
+		return "", err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return "", err
+	}
+	if n == 0 {
+		return "", fmt.Errorf("no project %q", projectID)
+	}
+	return key, nil
 }
 
 // ValidateAPIKey reports whether key is the current key for projectID.

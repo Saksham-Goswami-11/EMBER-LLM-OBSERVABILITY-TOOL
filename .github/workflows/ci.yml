@@ -55,3 +55,44 @@ jobs:
           go-version: "1.26"
       - run: cd web && npm ci && npm run build
       - run: go build -o bin/ember ./cmd/ember
+
+  # Catches a broken Dockerfile in review rather than at release time.
+  # Build only — publishing lives in release.yml.
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: ember:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Smoke-test the container
+        run: |
+          docker run -d --name ember-ci -p 8080:8080 \
+            -e EMBER_API_KEY=ember_ci_smoke_test_key_123456 ember:ci
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8080/healthz >/dev/null && break
+            sleep 1
+          done
+          echo "--- health ---"
+          curl -sf http://localhost:8080/healthz
+          echo "--- dashboard is served ---"
+          curl -sf -o /dev/null -w '%{http_code}\n' http://localhost:8080/ | grep -q 200
+          echo "--- ingest rejects a bad key ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Authorization: Bearer wrong' -H 'Content-Type: application/json' \
+            -d '{}' http://localhost:8080/v1/traces)
+          [ "$code" = "401" ] || { echo "expected 401, got $code"; exit 1; }
+          echo "--- ingest accepts the configured key ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            -H 'Authorization: Bearer ember_ci_smoke_test_key_123456' \
+            -H 'Content-Type: application/json' \
+            -d '{"resourceSpans":[]}' http://localhost:8080/v1/traces)
+          [ "$code" = "200" ] || { echo "expected 200, got $code"; exit 1; }
+          docker rm -f ember-ci

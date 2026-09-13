@@ -20,8 +20,18 @@ func New(store *storage.Store, prices *pricing.Table, webFS fs.FS) http.Handler 
 	mux := http.NewServeMux()
 	mux.Handle("/v1/traces", &ingest.Handler{Store: store, Pricing: prices})
 	mux.Handle("/api/", api.New(store))
+	mux.HandleFunc("/healthz", handleHealth)
 	mux.Handle("/", spaHandler(webFS))
 	return withLogging(mux)
+}
+
+// handleHealth is what the container healthcheck hits. It deliberately
+// reports nothing about the instance beyond liveness — it's reachable
+// without an API key.
+func handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
 // spaHandler serves the built dashboard, falling back to index.html for

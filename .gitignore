@@ -17,3 +17,8 @@ examples/demo-agent/demo-agent
 *.log
 .idea/
 .vscode/
+
+# Local environment (never commit real keys)
+.env
+.env.local
+!.env.example

@@ -7,12 +7,23 @@ you a trace waterfall, session grouping, and cost/token analytics — self-hoste
 with an embedded SQLite database instead of a ClickHouse/Postgres/Redis stack.
 
 ```bash
-docker run -p 8080:8080 -v ember-data:/data ghcr.io/sakshamgoswami/ember:latest
+git clone https://github.com/sakshamgoswami/ember.git
+cd ember
+cp .env.example .env          # set EMBER_API_KEY to anything 16+ characters
+docker compose up -d --build
 ```
 
-Open `http://localhost:8080`, copy the API key printed to the container logs,
-point your OTel exporter at `http://localhost:8080/v1/traces`, and traces
-show up within seconds.
+Open `http://localhost:8080`, point your app's OTel exporter at
+`http://localhost:8080/v1/traces` with `Authorization: Bearer <your key>`,
+and traces show up within seconds. See
+[`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) for how to wire up your app.
+
+Once a release is tagged, the published image skips the build entirely:
+
+```bash
+docker run -p 8080:8080 -v ember-data:/data \
+  -e EMBER_API_KEY=ember_your_key ghcr.io/sakshamgoswami/ember:latest
+```
 
 ## Why this exists
 
@@ -44,8 +55,7 @@ make build     # builds the dashboard, then embeds it into the Go binary
 make run       # starts ember on :8080
 ```
 
-The first run prints an API key — save it, it's stored only as a hash and
-can't be shown again:
+If you didn't set `EMBER_API_KEY`, the first run generates one and prints it:
 
 ```
 =========================================================
@@ -58,13 +68,22 @@ can't be shown again:
 =========================================================
 ```
 
+It's stored as a hash, so it can't be shown again — but a lost key no longer
+means losing your data. `make rotate-key` (or `ember -rotate-key`) issues a
+new one and leaves every trace in place.
+
 No traces yet? Run the bundled demo agent — it's a plain OpenTelemetry
 program, nothing Ember-specific, so it doubles as a working instrumentation
 example:
 
 ```bash
-EMBER_API_KEY=<the key above> make demo
+EMBER_API_KEY=<your key> make demo          # Go
+EMBER_API_KEY=<your key> make demo-python   # Python
 ```
+
+Both are plain OpenTelemetry programs with fabricated token counts — they
+exist so a fresh install has something to render, and double as
+instrumentation examples. They do not call any LLM.
 
 ### Hot-reload development
 
@@ -102,6 +121,16 @@ flowchart LR
   into the Go binary via `go:embed`. There is no separate frontend server in
   production.
 
+`GET /healthz` is unauthenticated and returns `{"status":"ok"}`; the compose
+healthcheck uses it via `ember -healthcheck`, since the distroless runtime
+image has no shell or curl.
+
+**Connecting your own app** is covered in
+[`docs/INTEGRATIONS.md`](docs/INTEGRATIONS.md) — environment-variable-only
+setup, auto-instrumentation, the exact `gen_ai.*` attributes Ember reads, and
+troubleshooting. Runnable examples: [`examples/python-agent`](examples/python-agent)
+and [`examples/demo-agent`](examples/demo-agent).
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -109,6 +138,11 @@ flowchart LR
 | `EMBER_ADDR` | `:8080` | Address the single HTTP server listens on |
 | `EMBER_DB_PATH` | `ember.db` | Path to the SQLite database file |
 | `EMBER_PRICING_PATH` | _(unset)_ | Optional JSON file of model pricing overrides |
+| `EMBER_API_KEY` | _(unset)_ | Ingest key. Set it up front (compose reads it from `.env`) instead of scraping the first-run log; changing it re-keys the project on restart |
+
+Flags: `ember -rotate-key` issues a new API key without touching stored
+traces; `ember -healthcheck` probes a running instance and is what the
+container healthcheck uses.
 
 ## Security note (read this before exposing Ember beyond localhost)
 

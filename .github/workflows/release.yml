@@ -1,0 +1,103 @@
+name: Release
+
+# Publishes the container image and cross-compiled binaries.
+#   - push to main  -> ghcr.io/<owner>/ember:main + :edge
+#   - tag v1.2.3    -> ghcr.io/<owner>/ember:1.2.3, :1.2, :latest + a GitHub Release
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Runners are amd64; QEMU is what makes the arm64 build possible, so
+      # the image also runs on Apple Silicon and arm VPSes.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=ref,event=branch
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  binaries:
+    # Only cut binaries for tagged releases.
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      # The dashboard is embedded via go:embed, so it must exist before any
+      # of the cross-compiles run.
+      - name: Build the dashboard
+        working-directory: web
+        run: npm ci && npm run build
+
+      - name: Cross-compile
+        run: |
+          mkdir -p dist
+          version="${GITHUB_REF_NAME}"
+          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            goos="${target%/*}"; goarch="${target#*/}"
+            out="ember-${version}-${goos}-${goarch}"
+            ext=""
+            [ "$goos" = "windows" ] && ext=".exe"
+            echo "building $out$ext"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+              go build -trimpath -ldflags="-s -w" -o "dist/${out}${ext}" ./cmd/ember
+            (cd dist && tar czf "${out}.tar.gz" "${out}${ext}" && rm "${out}${ext}")
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
